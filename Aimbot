@@ -1,0 +1,301 @@
+-- Services
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+local CoreGui = game:GetService("CoreGui")
+
+local LocalPlayer = Players.LocalPlayer
+local Camera = Workspace.CurrentCamera
+
+-- Cấu hình
+local Settings = {
+    AimbotEnabled = false,
+    AutoShootEnabled = true,
+    WallCheck = true,
+    TeamCheck = true,
+    FOVRadius = 180,     -- Kích thước vòng FOV (Có thể tăng giảm trực tiếp trên Menu)
+}
+
+---------------------------------------------------------
+-- TẠO VÒNG TRÒN FOV
+---------------------------------------------------------
+local FOVGui = Instance.new("ScreenGui")
+FOVGui.Name = "ExtremeSpamGui"
+FOVGui.ResetOnSpawn = false
+FOVGui.Parent = CoreGui
+
+local FOVFrame = Instance.new("Frame")
+FOVFrame.Name = "FOVCircle"
+FOVFrame.Parent = FOVGui
+FOVFrame.AnchorPoint = Vector2.new(0.5, 0.5)
+FOVFrame.Position = UDim2.new(0.5, 0, 0.5, 0)
+FOVFrame.Size = UDim2.new(0, Settings.FOVRadius * 2, 0, Settings.FOVRadius * 2)
+FOVFrame.BackgroundTransparency = 1
+FOVFrame.Visible = false
+
+local UICorner = Instance.new("UICorner")
+UICorner.CornerRadius = UDim.new(1, 0)
+UICorner.Parent = FOVFrame
+
+local UIStroke = Instance.new("UIStroke")
+UIStroke.Color = Color3.fromRGB(255, 0, 0) -- Viền đỏ sắc nét
+UIStroke.Thickness = 2.5
+UIStroke.Parent = FOVFrame
+
+local function updateFOVSize()
+    FOVFrame.Size = UDim2.new(0, Settings.FOVRadius * 2, 0, Settings.FOVRadius * 2)
+end
+
+-- Hàm kiểm tra tường siêu tốc
+local function isVisible(targetPart, targetCharacter)
+    if not Settings.WallCheck then return true end
+    local origin = Camera.CFrame.Position
+    local direction = targetPart.Position - origin
+    
+    local rayParams = RaycastParams.new()
+    rayParams.FilterDescendantsInstances = {LocalPlayer.Character, targetCharacter}
+    rayParams.FilterType = Enum.RaycastFilterType.Exclude
+    rayParams.IgnoreWater = true
+    
+    local rayResult = Workspace:Raycast(origin, direction, rayParams)
+    if rayResult then return false end
+    return true
+end
+
+-- Hàm tìm bộ phận lộ ra gần tâm nhất trong vòng tròn
+local function getClosestPartInFOV()
+    local bestPart = nil
+    local shortestDistance = math.huge
+    local screenCenter = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer then
+            if not Settings.TeamCheck or player.Team ~= LocalPlayer.Team then
+                local character = player.Character
+                if character and character:FindFirstChild("Humanoid") and character.Humanoid.Health > 0 then
+                    
+                    local partsToCheck = {
+                        character:FindFirstChild("Head"),
+                        character:FindFirstChild("UpperTorso") or character:FindFirstChild("Torso"),
+                        character:FindFirstChild("HumanoidRootPart"),
+                        character:FindFirstChild("Left Arm") or character:FindFirstChild("LeftUpperArm"),
+                        character:FindFirstChild("Right Arm") or character:FindFirstChild("RightUpperArm"),
+                        character:FindFirstChild("Left Leg") or character:FindFirstChild("LeftUpperLeg"),
+                        character:FindFirstChild("Right Leg") or character:FindFirstChild("RightUpperLeg")
+                    }
+
+                    for _, part in ipairs(partsToCheck) do
+                        if part then
+                            local screenPoint, onScreen = Camera:WorldToViewportPoint(part.Position)
+                            if onScreen and isVisible(part, character) then
+                                local partScreenPos = Vector2.new(screenPoint.X, screenPoint.Y)
+                                local mouseDist = (partScreenPos - screenCenter).Magnitude
+                                
+                                if mouseDist <= Settings.FOVRadius and mouseDist < shortestDistance then
+                                    shortestDistance = mouseDist
+                                    bestPart = part
+                                end
+                            end
+                        end
+                    end
+                    
+                end
+            end
+        end
+    end
+    return bestPart
+end
+
+-- Biến cờ kiểm soát trạng thái lú địch
+local targetDetected = false
+
+-- LUỒNG SPAM HẾT CỠ (Ép xung tốc độ nhấp nhả phím bắn liên tục ở mức tối đa)
+task.spawn(function()
+    while true do
+        if Settings.AimbotEnabled and Settings.AutoShootEnabled and targetDetected then
+            pcall(function()
+                local touchX = Camera.ViewportSize.X * 0.85
+                local touchY = Camera.ViewportSize.Y * 0.75
+                
+                -- Spam dồn dập không độ trễ
+                VirtualInputManager:SendMouseButtonEvent(touchX, touchY, 0, true, game, 1)
+                RunService.RenderStepped:Wait()
+                VirtualInputManager:SendMouseButtonEvent(touchX, touchY, 0, false, game, 1)
+            end)
+        else
+            task.wait(0.005)
+        end
+        task.wait()
+    end
+end)
+
+-- Vòng lặp khóa cứng mục tiêu ngay lập tức khi vừa ló mặt
+RunService:BindToRenderStep("ExtremeAimAndFire", Enum.RenderPriority.Camera.Value + 1, function()
+    if Settings.AimbotEnabled then
+        FOVFrame.Visible = true
+        local targetPart = getClosestPartInFOV()
+        
+        if targetPart then
+            Camera.CFrame = CFrame.new(Camera.CFrame.Position, targetPart.Position)
+            targetDetected = true -- Bật cờ spam hết cỡ
+        else
+            targetDetected = false
+        end
+    else
+        FOVFrame.Visible = false
+        targetDetected = false
+    end
+end)
+
+---------------------------------------------------------
+-- GIAO DIỆN MENU TRÊN DI ĐỘNG
+---------------------------------------------------------
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "ExtremeSpamMenu"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.Parent = CoreGui
+
+local OpenButton = Instance.new("TextButton")
+OpenButton.Parent = ScreenGui
+OpenButton.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+OpenButton.Position = UDim2.new(0.05, 0, 0.15, 0)
+OpenButton.Size = UDim2.new(0, 110, 0, 40)
+OpenButton.Font = Enum.Font.SourceSansBold
+OpenButton.Text = "Menu Aim"
+OpenButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+OpenButton.TextSize = 16
+OpenButton.Active = true
+OpenButton.Draggable = true
+
+local UICornerOpen = Instance.new("UICorner")
+UICornerOpen.CornerRadius = UDim.new(0, 8)
+UICornerOpen.Parent = OpenButton
+
+local MainFrame = Instance.new("Frame")
+MainFrame.Parent = ScreenGui
+MainFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+MainFrame.Position = UDim2.new(0.05, 0, 0.23, 0)
+MainFrame.Size = UDim2.new(0, 220, 0, 250)
+MainFrame.Visible = false
+MainFrame.Active = true
+MainFrame.Draggable = true
+
+local UICornerFrame = Instance.new("UICorner")
+UICornerFrame.CornerRadius = UDim.new(0, 10)
+UICornerFrame.Parent = MainFrame
+
+local Title = Instance.new("TextLabel")
+Title.Parent = MainFrame
+Title.BackgroundTransparency = 1
+Title.Size = UDim2.new(1, 0, 0, 30)
+Title.Font = Enum.Font.SourceSansBold
+Title.Text = "VỪA LÚ LÀ SPAM HẾT CỠ"
+Title.TextColor3 = Color3.fromRGB(255, 69, 0)
+Title.TextSize = 11
+
+local function createToggle(name, defaultState, posY, callback)
+    local btn = Instance.new("TextButton")
+    btn.Parent = MainFrame
+    btn.BackgroundColor3 = defaultState and Color3.fromRGB(30, 90, 30) or Color3.fromRGB(50, 50, 50)
+    btn.Position = UDim2.new(0.05, 0, 0, posY)
+    btn.Size = UDim2.new(0.9, 0, 0, 32)
+    btn.Font = Enum.Font.SourceSansBold
+    btn.Text = name .. (defaultState and ": ON" or ": OFF")
+    btn.TextColor3 = defaultState and Color3.fromRGB(70, 255, 70) or Color3.fromRGB(255, 70, 70)
+    btn.TextSize = 13
+    
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 6)
+    corner.Parent = btn
+    
+    local state = defaultState
+    btn.MouseButton1Click:Connect(function()
+        state = not state
+        callback(state)
+        if state then
+            btn.Text = name .. ": ON"
+            btn.TextColor3 = Color3.fromRGB(70, 255, 70)
+            btn.BackgroundColor3 = Color3.fromRGB(30, 90, 30)
+        else
+            btn.Text = name .. ": OFF"
+            btn.TextColor3 = Color3.fromRGB(255, 70, 70)
+            btn.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+        end
+    end)
+end
+
+createToggle("Extreme Aim", Settings.AimbotEnabled, 35, function(state)
+    Settings.AimbotEnabled = state
+end)
+
+createToggle("Vừa lú spam hết cỡ", Settings.AutoShootEnabled, 72, function(state)
+    Settings.AutoShootEnabled = state
+end)
+
+createToggle("Chặn tường", Settings.WallCheck, 109, function(state)
+    Settings.WallCheck = state
+end)
+
+createToggle("Lọc đồng đội", Settings.TeamCheck, 146, function(state)
+    Settings.TeamCheck = state
+end)
+
+-- Điều chỉnh FOV trực tiếp trên Menu
+local FOVLabel = Instance.new("TextLabel")
+FOVLabel.Parent = MainFrame
+FOVLabel.BackgroundTransparency = 1
+FOVLabel.Position = UDim2.new(0.05, 0, 0, 183)
+FOVLabel.Size = UDim2.new(0.9, 0, 0, 30)
+FOVLabel.Font = Enum.Font.SourceSansBold
+FOVLabel.Text = "Vòng FOV: " .. Settings.FOVRadius
+FOVLabel.TextColor3 = Color3.fromRGB(0, 255, 255)
+FOVLabel.TextSize = 13
+
+local MinusBtn = Instance.new("TextButton")
+MinusBtn.Parent = MainFrame
+MinusBtn.BackgroundColor3 = Color3.fromRGB(90, 30, 30)
+MinusBtn.Position = UDim2.new(0.05, 0, 0, 215)
+MinusBtn.Size = UDim2.new(0.42, 0, 0, 28)
+MinusBtn.Font = Enum.Font.SourceSansBold
+MinusBtn.Text = "FOV (-)"
+MinusBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+MinusBtn.TextSize = 13
+
+local c1 = Instance.new("UICorner")
+c1.CornerRadius = UDim.new(0, 6)
+c1.Parent = MinusBtn
+
+local PlusBtn = Instance.new("TextButton")
+PlusBtn.Parent = MainFrame
+PlusBtn.BackgroundColor3 = Color3.fromRGB(30, 90, 30)
+PlusBtn.Position = UDim2.new(0.53, 0, 0, 215)
+PlusBtn.Size = UDim2.new(0.42, 0, 0, 28)
+PlusBtn.Font = Enum.Font.SourceSansBold
+PlusBtn.Text = "FOV (+)"
+PlusBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+PlusBtn.TextSize = 13
+
+local c2 = Instance.new("UICorner")
+c2.CornerRadius = UDim.new(0, 6)
+c2.Parent = PlusBtn
+
+MinusBtn.MouseButton1Click:Connect(function()
+    if Settings.FOVRadius > 50 then
+        Settings.FOVRadius = Settings.FOVRadius - 20
+        updateFOVSize()
+        FOVLabel.Text = "Vòng FOV: " .. Settings.FOVRadius
+    end
+end)
+
+PlusBtn.MouseButton1Click:Connect(function()
+    if Settings.FOVRadius < 400 then
+        Settings.FOVRadius = Settings.FOVRadius + 20
+        updateFOVSize()
+        FOVLabel.Text = "Vòng FOV: " .. Settings.FOVRadius
+    end
+end)
+
+OpenButton.MouseButton1Click:Connect(function()
+    MainFrame.Visible = not MainFrame.Visible
+end)
